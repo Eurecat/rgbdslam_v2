@@ -23,6 +23,7 @@
 #include <message_filters/synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
 #include <sensor_msgs/Image.h>
+#include <sensor_msgs/CompressedImage.h>
 #include <sensor_msgs/CameraInfo.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <nav_msgs/Odometry.h>
@@ -51,9 +52,11 @@ typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image,
 
 //The policy merges kinect messages with approximately equal timestamp into one callback 
 typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, 
-                                                        sensor_msgs::Image,
-                                                        sensor_msgs::CameraInfo> NoCloudSyncPolicy;
+                                                        sensor_msgs::Image> NoCloudSyncPolicy;
 
+//The policy merges kinect messages with approximately equal timestamp into one callback 
+typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::CompressedImage, 
+                                                        sensor_msgs::Image> NoCloudCompSyncPolicy;
 
 /**
  * Inherits from message_filters::SimpleFilter<M>
@@ -124,9 +127,11 @@ class OpenNIListener : public QObject {
                          const sensor_msgs::ImageConstPtr& depth_img, 
                          const sensor_msgs::PointCloud2ConstPtr& point_cloud);
     //! For this callback the point cloud is not required. 
+    void noCloudCompCallback (const sensor_msgs::CompressedImageConstPtr& visual_img_msg,
+                          const sensor_msgs::ImageConstPtr& depth_img_msg) ;
+    //! For this callback the point cloud is not required. 
     void noCloudCallback (const sensor_msgs::ImageConstPtr& visual_img_msg,
-                          const sensor_msgs::ImageConstPtr& depth_img_msg,
-                          const sensor_msgs::CameraInfoConstPtr& cam_info_msg) ;
+                          const sensor_msgs::ImageConstPtr& depth_img_msg) ;
     //! No depth image but pointcloud, e.g., for stereo cameras
     void stereoCallback(const sensor_msgs::ImageConstPtr& visual_img_msg, const sensor_msgs::PointCloud2ConstPtr& point_cloud);
     //! Callback for the robot odometry
@@ -198,6 +203,8 @@ class OpenNIListener : public QObject {
     message_filters::Synchronizer<StereoSyncPolicy>* stereo_sync_;
     message_filters::Synchronizer<KinectSyncPolicy>* kinect_sync_;
     message_filters::Synchronizer<NoCloudSyncPolicy>* no_cloud_sync_;
+    message_filters::Synchronizer<NoCloudCompSyncPolicy>* no_cloud_comp_sync_;
+    message_filters::Subscriber<sensor_msgs::CompressedImage> *comp_visua_sub_;      
     message_filters::Subscriber<sensor_msgs::Image> *visua_sub_;      
     message_filters::Subscriber<sensor_msgs::Image> *depth_sub_;      
     message_filters::Subscriber<sensor_msgs::CameraInfo> *cinfo_sub_;      

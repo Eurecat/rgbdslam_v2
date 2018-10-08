@@ -8,20 +8,30 @@
      openni driver. 
  -->
 <launch>
-  <!-- Delete the next line, if you start the openni driver separately -->
-  <include file="$(find openni_launch)/launch/openni.launch"/>
-  <node pkg="rviz" type="rviz" name="rviz" args="-d $(find rgbdslam)/launch/fast_visual_odometry.rviz"/> 
 
+    <arg name="bagfile" default="/media/fchataigner/francois/rosbags/arsi_2018-09-21-09-56-21_ld_exposure_1200.bag" />
+    <arg name="rosbag_skip" default="0" />
+
+    <node pkg="rosbag" type="play" name="rosbag_play" args="$(arg bagfile) -s $(arg rosbag_skip)" output="screen" />
+    
+<!--    <node pkg="rviz" type="rviz" name="rviz" args="-d rgbdslam.rviz" />-->
+    
   <node pkg="rgbdslam" type="rgbdslam" name="rgbdslam" cwd="node" required="true" output="screen"> 
+    <!-- IO settings-->
+<!--    <param name="config/use_gui" value="false" />-->
+    
     <!-- Input data settings-->
-    <param name="config/topic_image_mono"              value="/camera/rgb/image_color"/> 
-    <param name="config/topic_image_depth"             value="/camera/depth_registered/sw_registered/image_rect_raw"/>
+    <param name="config/topic_image_mono"              value="/rgb/image/throttle/compressed"/> 
+    <param name="config/topic_image_depth"             value="/depth/image/throttle"/>
+<!--    <param name="config/topic_image_mono"              value="/rgb/repub"/> -->
+<!--    <param name="config/topic_image_depth"             value="/depth/repub"/>-->
+    <param name="config/camera_info_topic"             value="/rgb/camera_info"/>
+
 
     <param name="config/feature_extractor_type"        value="ORB"/><!-- ORB are fastest descriptors and require no GPU -->
     <param name="config/feature_detector_type"         value="ORB"/><!-- FAST can guarantee a certain range of keypoints using an adjuster-->
     <param name="config/detector_grid_resolution"      value="3"/><!-- detect on a 2x2 grid -->
-    <param name="config/max_keypoints"                 value="600"/><!-- Extract no more than this many keypoints -->
-    <param name="config/max_matches"                   value="300"/><!-- Keep the best n matches (important for ORB to set lower than max_keypoints) -->
+    <param name="config/max_keypoints"                 value="1000"/><!-- Extract no more than this many keypoints -->
 
     <param name="config/min_sampled_candidates"        value="0"/><!-- Frame-to-frame comparisons to random frames (big loop closures) -->
     <param name="config/predecessor_candidates"        value="3"/><!-- Frame-to-frame comparisons to sequential frames-->
@@ -33,7 +43,8 @@
     <param name="config/keep_all_nodes"                value="true"/><!-- assume zero motion if no motion could be found and continue -->
     <param name="config/fixed_frame_name"              value="/vodom"/><!-- Signify that this is not mapping -->
 
+    <param name="config/store_pointclouds"             value="false"/> <!-- If the point clouds are not needed online, setting this to false saves lots of memory -->
     <param name="config/backend_solver"                value="pcg"/> <!-- pcg is fast and good for online operation -->
-    <param name="config/cloud_creation_skip_step"      value="16"/> <!-- Heavily subsample point cloud during creation -->
+    <param name="config/cloud_creation_skip_step"      value="4"/> <!-- Heavily subsample point cloud during creation -->
   </node>
 </launch>

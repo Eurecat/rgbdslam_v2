@@ -52,6 +52,7 @@
 //for comparison with ground truth from mocap and movable cameras on robots
 #include <tf/transform_listener.h>
 
+typedef message_filters::Subscriber<sensor_msgs::CompressedImage> comp_image_sub_type;      
 typedef message_filters::Subscriber<sensor_msgs::Image> image_sub_type;      
 typedef message_filters::Subscriber<sensor_msgs::CameraInfo> cinfo_sub_type;      
 typedef message_filters::Subscriber<sensor_msgs::PointCloud2> pc_sub_type;      
@@ -114,7 +115,7 @@ void OpenNIListener::visualize_images(cv::Mat visual_image, cv::Mat depth_image)
 OpenNIListener::OpenNIListener(GraphManager* graph_mgr)
 : graph_mgr_(graph_mgr),
   stereo_sync_(NULL), kinect_sync_(NULL), no_cloud_sync_(NULL),
-  visua_sub_(NULL), depth_sub_(NULL), cloud_sub_(NULL),
+  visua_sub_(NULL), depth_sub_(NULL), cloud_sub_(NULL), comp_visua_sub_(NULL),
   depth_mono8_img_(cv::Mat()),
   pause_(ParameterServer::instance()->get<bool>("start_paused")),
   getOneFrame_(false),
@@ -150,6 +151,10 @@ void OpenNIListener::setupSubscribers(){
     std::string widev_tpc = ps->get<std::string>("wide_topic");
     std::string widec_tpc = ps->get<std::string>("wide_cloud_topic");
 
+    ROS_WARN_THROTTLE( 1, "rgb=%d depth=%d", 
+        !visua_tpc.empty() && visua_tpc.find("compressed") != std::string::npos, 
+        !depth_tpc.empty() );
+
     //All information from Kinect
     if(!visua_tpc.empty() && !depth_tpc.empty() && !cloud_tpc.empty())
     {   
@@ -160,14 +165,24 @@ void OpenNIListener::setupSubscribers(){
         kinect_sync_->registerCallback(boost::bind(&OpenNIListener::kinectCallback, this, _1, _2, _3));
         ROS_INFO_STREAM_NAMED("OpenNIListener", "Listening to " << visua_tpc << ", " << depth_tpc << " and " << cloud_tpc);
     } 
+    //No cloud, but visual image (compressed) and depth
+    else if(!visua_tpc.empty() && visua_tpc.find("compressed") != std::string::npos && !depth_tpc.empty() && !cinfo_tpc.empty() && cloud_tpc.empty())
+    {   
+        comp_visua_sub_ = new comp_image_sub_type(nh, visua_tpc, q);
+        depth_sub_ = new image_sub_type(nh, depth_tpc, q);
+        //cinfo_sub_ = new cinfo_sub_type(nh, cinfo_tpc, q);
+        no_cloud_comp_sync_ = new message_filters::Synchronizer<NoCloudCompSyncPolicy>(NoCloudCompSyncPolicy(q),  *comp_visua_sub_, *depth_sub_);
+        no_cloud_comp_sync_->registerCallback(boost::bind(&OpenNIListener::noCloudCompCallback, this, _1, _2));
+        ROS_INFO_STREAM_NAMED("OpenNIListener", "Listening to " << visua_tpc << " and " << depth_tpc);
+    } 
     //No cloud, but visual image and depth
     else if(!visua_tpc.empty() && !depth_tpc.empty() && !cinfo_tpc.empty() && cloud_tpc.empty())
     {   
         visua_sub_ = new image_sub_type(nh, visua_tpc, q);
         depth_sub_ = new image_sub_type(nh, depth_tpc, q);
-        cinfo_sub_ = new cinfo_sub_type(nh, cinfo_tpc, q);
-        no_cloud_sync_ = new message_filters::Synchronizer<NoCloudSyncPolicy>(NoCloudSyncPolicy(q),  *visua_sub_, *depth_sub_, *cinfo_sub_);
-        no_cloud_sync_->registerCallback(boost::bind(&OpenNIListener::noCloudCallback, this, _1, _2, _3));
+        //cinfo_sub_ = new cinfo_sub_type(nh, cinfo_tpc, q);
+        no_cloud_sync_ = new message_filters::Synchronizer<NoCloudSyncPolicy>(NoCloudSyncPolicy(q),  *visua_sub_, *depth_sub_);
+        no_cloud_sync_->registerCallback(boost::bind(&OpenNIListener::noCloudCallback, this, _1, _2));
         ROS_INFO_STREAM_NAMED("OpenNIListener", "Listening to " << visua_tpc << " and " << depth_tpc);
     } 
 
@@ -358,8 +373,8 @@ void OpenNIListener::loadBagFakeSubscriberSetup(const std::string& visua_tpc,
     depth_img_sub_ = new BagSubscriber<sensor_msgs::Image>();
     rgb_img_sub_ = new BagSubscriber<sensor_msgs::Image>();
     cam_info_sub_ = new BagSubscriber<sensor_msgs::CameraInfo>();
-    no_cloud_sync_ = new message_filters::Synchronizer<NoCloudSyncPolicy>(NoCloudSyncPolicy(q),  *rgb_img_sub_, *depth_img_sub_, *cam_info_sub_);
-    no_cloud_sync_->registerCallback(boost::bind(&OpenNIListener::noCloudCallback, this, _1, _2, _3));
+    no_cloud_sync_ = new message_filters::Synchronizer<NoCloudSyncPolicy>(NoCloudSyncPolicy(q),  *rgb_img_sub_, *depth_img_sub_);
+    no_cloud_sync_->registerCallback(boost::bind(&OpenNIListener::noCloudCallback, this, _1, _2));
     ROS_INFO_STREAM_NAMED("OpenNIListener", "Listening to " << visua_tpc << ", " << depth_tpc << " and " << cinfo_tpc);
   } 
   else if(!visua_tpc.empty() && !depth_tpc.empty() && !points_tpc.empty())
@@ -597,9 +612,105 @@ OpenNIListener::~OpenNIListener(){
   delete tflistener_;
 }
 
+void OpenNIListener::noCloudCompCallback (const sensor_msgs::CompressedImageConstPtr& visual_img_msg,
+                                      const sensor_msgs::ImageConstPtr& depth_img_msg) 
+{
+  ScopedTimer s(__FUNCTION__);
+  ROS_WARN_ONCE_NAMED("eval", "First RGBD-Data Received");
+  ROS_DEBUG("Received data from kinect");
+  ParameterServer* ps = ParameterServer::instance();
+
+  if(++data_id_ < ps->get<int>("skip_first_n_frames") 
+     || data_id_ % ps->get<int>("data_skip_step") != 0)
+  { 
+  // If only a subset of frames are used, skip computations but visualize if gui is running
+    ROS_INFO_THROTTLE_NAMED(1, "OpenNIListener", "Skipping Frame %i because of data_skip_step setting (this msg is only shown once a sec)", data_id_);
+    if(ps->get<bool>("use_gui")){//Show the image, even if not using it
+      //cv::Mat depth_float_img = cv_bridge::toCvCopy(depth_img_msg)->image;
+      cv::Mat visual_img =  cv_bridge::toCvCopy(visual_img_msg)->image;
+      //if(visual_img.rows != depth_float_img.rows || 
+      //   visual_img.cols != depth_float_img.cols){
+      //  ROS_ERROR("depth and visual image differ in size! Ignoring Data");
+      //  return;
+      //}
+      //depthToCV8UC1(depth_float_img, depth_mono8_img_); //float can't be visualized or used as mask in float format TODO: reprogram keypoint detector to use float values with nan to mask
+      //image_encoding_ = visual_img_msg->encoding;
+      //Q_EMIT newVisualImage(cvMat2QImage(visual_img, 0)); //visual_idx=0
+      //Q_EMIT newDepthImage (cvMat2QImage(depth_mono8_img_,1));//overwrites last cvMat2QImage
+    }
+    return;
+  }
+
+
+  //Convert images to OpenCV format
+  //sensor_msgs::CvBridge bridge;
+  //cv::Mat depth_float_img = bridge.imgMsgToCv(depth_img_msg);
+  //cv::Mat visual_img =  bridge.imgMsgToCv(visual_img_msg);
+  cv::Mat depth_float_img = cv_bridge::toCvCopy(depth_img_msg)->image;
+  //const cv::Mat& depth_float_img_big = cv_bridge::toCvShare(depth_img_msg)->image;
+  cv::Mat visual_img;
+  if(image_encoding_ == "bayer_grbg8"){
+    cv_bridge::toCvCopy(visual_img_msg);
+    ROS_INFO_NAMED("OpenNIListener", "Converting from Bayer to RGB");
+    cv::cvtColor(cv_bridge::toCvCopy(visual_img_msg)->image, visual_img, CV_BayerGR2RGB, 3);
+  } else{
+    ROS_INFO_STREAM("Format: " << visual_img_msg->format);
+    visual_img =  cv_bridge::toCvCopy(visual_img_msg)->image;
+  }
+  //const cv::Mat& visual_img_big =  cv_bridge::toCvShare(visual_img_msg)->image;
+  //cv::Size newsize(320, 240);
+  //cv::Mat visual_img(newsize, visual_img_big.type()), depth_float_img(newsize, depth_float_img_big.type());
+  //cv::resize(visual_img_big, visual_img, newsize);
+  //cv::resize(depth_float_img_big, depth_float_img, newsize);
+  if(visual_img.rows != depth_float_img.rows || 
+     visual_img.cols != depth_float_img.cols){
+    ROS_WARN("depth and visual image differ in size! Rescaling Depth Data");
+    cv::resize(depth_float_img, depth_float_img, visual_img.size(), 0,0,cv::INTER_NEAREST);
+    //return;
+  }
+  image_encoding_ = "bgr8"; // visual_img_msg->encoding;
+
+  depthToCV8UC1(depth_float_img, depth_mono8_img_); //float can't be visualized or used as mask in float format TODO: reprogram keypoint detector to use float values with nan to mask
+
+  if(asyncFrameDrop(depth_img_msg->header.stamp, visual_img_msg->header.stamp)) 
+    return;
+
+
+  if(pause_ && !getOneFrame_){ 
+    if(ps->get<bool>("use_gui")){
+      Q_EMIT newVisualImage(cvMat2QImage(visual_img, 0)); //visual_idx=0
+      Q_EMIT newDepthImage (cvMat2QImage(depth_mono8_img_,1));//overwrites last cvMat2QImage
+    }
+    return;
+  }
+
+  static sensor_msgs::CameraInfoPtr cam_info_msg;
+  
+  if ( !cam_info_msg )
+  {
+    cam_info_msg = boost::make_shared<sensor_msgs::CameraInfo>();
+    cam_info_msg->header.frame_id = "/openni_rgb_optical_frame";
+    cam_info_msg->width = 640;
+    cam_info_msg->height = 480;
+    cam_info_msg->distortion_model = "plumb_bob";
+    cam_info_msg->D = { 0.0, 0.0, 0.0, 0.0, 0.0 };
+    cam_info_msg->K = { 570.3422241210938, 0.0, 319.5, 0.0, 570.3422241210938, 239.5, 0.0, 0.0, 1.0 };
+    cam_info_msg->R = { 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0 };
+    cam_info_msg->P = { 570.3422241210938, 0.0, 319.5, 0.0, 0.0, 570.3422241210938, 239.5, 0.0, 0.0, 0.0, 1.0, 0.0 };
+    cam_info_msg->binning_x = 0;
+    cam_info_msg->binning_y = 0;
+    cam_info_msg->roi.x_offset = 0;
+    cam_info_msg->roi.y_offset = 0;
+    cam_info_msg->roi.height = 0;
+    cam_info_msg->roi.width = 0;
+    cam_info_msg->roi.do_rectify = false;
+  }
+  
+  noCloudCameraCallback(visual_img, depth_float_img, depth_mono8_img_, visual_img_msg->header, cam_info_msg);
+}
+
 void OpenNIListener::noCloudCallback (const sensor_msgs::ImageConstPtr& visual_img_msg,
-                                      const sensor_msgs::ImageConstPtr& depth_img_msg,
-                                      const sensor_msgs::CameraInfoConstPtr& cam_info_msg) 
+                                      const sensor_msgs::ImageConstPtr& depth_img_msg) 
 {
   ScopedTimer s(__FUNCTION__);
   ROS_WARN_ONCE_NAMED("eval", "First RGBD-Data Received");
@@ -669,6 +780,29 @@ void OpenNIListener::noCloudCallback (const sensor_msgs::ImageConstPtr& visual_i
     }
     return;
   }
+  
+  static sensor_msgs::CameraInfoPtr cam_info_msg;
+  
+  if ( !cam_info_msg )
+  {
+    cam_info_msg = boost::make_shared<sensor_msgs::CameraInfo>();
+    cam_info_msg->header.frame_id = "/openni_rgb_optical_frame";
+    cam_info_msg->width = 640;
+    cam_info_msg->height = 480;
+    cam_info_msg->distortion_model = "plumb_bob";
+    cam_info_msg->D = { 0.0, 0.0, 0.0, 0.0, 0.0 };
+    cam_info_msg->K = { 570.3422241210938, 0.0, 319.5, 0.0, 570.3422241210938, 239.5, 0.0, 0.0, 1.0 };
+    cam_info_msg->R = { 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0 };
+    cam_info_msg->P = { 570.3422241210938, 0.0, 319.5, 0.0, 0.0, 570.3422241210938, 239.5, 0.0, 0.0, 0.0, 1.0, 0.0 };
+    cam_info_msg->binning_x = 0;
+    cam_info_msg->binning_y = 0;
+    cam_info_msg->roi.x_offset = 0;
+    cam_info_msg->roi.y_offset = 0;
+    cam_info_msg->roi.height = 0;
+    cam_info_msg->roi.width = 0;
+    cam_info_msg->roi.do_rectify = false;
+  }
+  
   noCloudCameraCallback(visual_img, depth_float_img, depth_mono8_img_, visual_img_msg->header, cam_info_msg);
 }
 
