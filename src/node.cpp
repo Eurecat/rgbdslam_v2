@@ -122,6 +122,10 @@ Node::Node(const cv::Mat& visual,
   ScopedTimer s("Node Constructor");
   ParameterServer* ps = ParameterServer::instance();
 
+  ros::NodeHandle pnh("~");
+  features_pub_ = pnh.advertise<std_msgs::UInt16>( "features", 1 );
+  inliers_pub_ = pnh.advertise<std_msgs::UInt16>( "inliers", 1 );
+
   //Create point cloud inf necessary
   if(ps->get<bool>("store_pointclouds") || 
      ps->get<int>("emm__skip_step") > 0 ||
@@ -237,6 +241,9 @@ Node::Node(const cv::Mat& visual,
       ps->get<std::string>("feature_extractor_type") == "SIFT")){
     squareroot_descriptor_space(feature_descriptors_);
   }
+  
+  features_msg_.data = feature_locations_2d_.size();
+  features_pub_.publish(features_msg_);
 }
 
 
@@ -1322,6 +1329,10 @@ MatchingResult Node::matchNodePair(const Node* older_node)
     } 
     else {//All good for feature based transformation estimation
         found_transformation = getRelativeTransformationTo(older_node,&mr.all_matches, mr.ransac_trafo, mr.rmse, mr.inlier_matches); 
+        
+        inliers_msg_.data = mr.inlier_matches.size();
+        inliers_pub_.publish(inliers_msg_);
+        
         //Statistics
         float nn_ratio = 0.0;
         if(found_transformation){

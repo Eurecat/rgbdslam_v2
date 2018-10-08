@@ -23,6 +23,7 @@
 #endif
 
 #include "ros/ros.h"
+#include <std_msgs/UInt16.h>
 #include <vector>
 #include <opencv2/core/core.hpp>
 #include <opencv2/features2d/features2d.hpp>
@@ -145,6 +146,9 @@ public:
   void addPointCloud(pointcloud_type::Ptr pc_col);
 
 
+  ros::Publisher features_pub_, inliers_pub_;
+  std_msgs::UInt16 features_msg_, inliers_msg_;
+  
   //!erase the points from the cloud to save memory
   void clearPointCloud();
   //!reduce the points from the cloud using a voxelgrid_filter to save memory
