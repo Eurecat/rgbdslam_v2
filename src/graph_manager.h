@@ -64,6 +64,8 @@
 #include "g2o/core/hyper_dijkstra.h"
 #include "g2o/core/robust_kernel_impl.h"
 
+#include <nav_msgs/Odometry.h>
+
 namespace tf {
 class TransformListener;
 }
@@ -328,6 +330,8 @@ protected:
     ros::Timer timer_;
     //!Used to broadcast the pose estimate
     mutable tf::TransformBroadcaster br_;
+    mutable ros::Publisher odom_pub_;
+    mutable nav_msgs::Odometry odom_msg_;
     tf::Transform computed_motion_; ///<transformation of the last frame to the first frame (assuming the first one is fixed)
     tf::Transform  init_base_pose_;
     tf::StampedTransform latest_transform_cache_;//base_frame -> optical_frame 

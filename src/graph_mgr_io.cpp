@@ -966,6 +966,29 @@ void GraphManager::broadcastLatestTransform(const ros::TimerEvent& event) const
 void GraphManager::broadcastTransform(const tf::StampedTransform& stamped_transform) 
 {
     br_.sendTransform(stamped_transform);
+    
+    if ( !odom_pub_ ) 
+    {
+        ros::NodeHandle pnh("~");
+        odom_pub_ = pnh.advertise<nav_msgs::Odometry>( "odom", 1 );
+    }
+    
+    const auto& p = stamped_transform.getOrigin();
+    const auto& q = stamped_transform.getRotation();
+    
+    odom_msg_.header.stamp = stamped_transform.stamp_;
+    odom_msg_.header.frame_id = stamped_transform.frame_id_;
+    odom_msg_.child_frame_id = stamped_transform.child_frame_id_;
+    odom_msg_.pose.pose.position.x = p.x();
+    odom_msg_.pose.pose.position.y = p.y();
+    odom_msg_.pose.pose.position.z = p.z();
+    odom_msg_.pose.pose.orientation.x = q.x();
+    odom_msg_.pose.pose.orientation.y = q.y();
+    odom_msg_.pose.pose.orientation.z = q.z();
+    odom_msg_.pose.pose.orientation.w = q.w();
+    
+    odom_pub_.publish(odom_msg_);
+    
     if(graph_.size() > 0){
       Node* current_node = graph_.at(graph_.size() - 1);
       if(current_node && current_node->header_.stamp.toSec() == stamped_transform.stamp_.toSec()){
